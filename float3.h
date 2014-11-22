@@ -40,6 +40,11 @@ public:
 		return float3(x * operand.x, y * operand.y, z * operand.z);
 	}
 
+	float3 operator-(float operand) const
+	{
+		return float3(x - operand, y - operand, z - operand);
+	}
+
 	float3 operator/(double operand) const
 	{
 		return float3(x / operand, y / operand, z / operand);
