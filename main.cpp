@@ -381,16 +381,15 @@ public:
 	    :Intersectable(material) {
 	    // infinite cylinder hardwired
 	    A = float4x4::identity;
-	    A._00 = 0;
+	    A._00 = 3;
+	    A._11 = 0;
+	    A._22 = 3;
 	    A._33 = -1;
 	    // sphere or radius 2 hardwired
 	    B = float4x4::identity;
-	    B._33 = -2;
+	    B._33 = 3.5;
+	    B._13 = -4;
     } // add methods to change quadric
-
-    void rotate(float theta) {
-    	
-    }
 
     Hit intersect(const Ray& ray)
     {
