@@ -23,10 +23,10 @@
 #include "float4x4.h"
 #include <vector>
 #include <algorithm>
-// #include "perlin.h"
+#include "perlin.h"
 
 // For procedural texturing
-// Perlin perlin;
+Perlin perlin;
 // for quadrics, so that we do not need a float4.cpp
 const float4x4 float4x4::identity(
 	1, 0, 0, 0,
@@ -152,6 +152,7 @@ public:
 	    if(cosDelta < 0) return diffuse; // return float3(0,0,0);
 	    return diffuse + lightPowerDensity * ks 
 	                    * pow(cosDelta, shininess);
+
 	    // float cosTheta = normal.dot(lightDir);
 	    // return lightDir * lightDir;          
 	}
@@ -229,6 +230,9 @@ protected:
 public:
 	Intersectable(Material* material):material(material) {}
     virtual Hit intersect(const Ray& ray)=0;
+    void rotate(float3 axis, float angle) {}
+    void scale(float3 scaleFactor) {}
+    void translate(float3 translation) {}
 };
 
 // Object realization.
@@ -313,6 +317,14 @@ class Quadric : public Intersectable
 {
 	float4x4 A;
 public:
+    Quadric(Material* material):
+    Intersectable(material)
+    {
+        A = float4x4::identity;
+        A._11 = 8;
+        A._33 = -4;
+    }
+    
     Quadric(const float3& center, const float4& size, Material* material):
       Intersectable(material)
     { // ellipsoid hardwired here
@@ -327,6 +339,19 @@ public:
     	A._03 = center.x;
     	A._13 = center.y;
     	A._23 = center.z;
+    }
+    
+    void rotate(float3 axis, float angle) {
+        A = float4x4::rotation(axis, -angle) * A * float4x4::rotation(axis, angle);
+    }
+    
+    void scale(float3 scaleFactor) {
+        scaleFactor = float3(1 / scaleFactor.x, 1 / scaleFactor.y, 1 / scaleFactor.z);
+        A = float4x4::scaling(scaleFactor) * A * float4x4::scaling(scaleFactor);
+    }
+    
+    void translate(float3 translation) {
+        A = float4x4::translation(translation) * A * float4x4::translation(translation).transpose();
     }
 
     Hit intersect(const Ray& ray)
@@ -374,23 +399,59 @@ public:
 
 class ClippedQuadric : public Intersectable
 {
-  float4x4 A;
-  float4x4 B;
+    float4x4 A;
+    float4x4 B;
 public:
     ClippedQuadric(Material* material)
 	    :Intersectable(material) {
 	    // infinite cylinder hardwired
-	    A = float4x4::identity;
-	    A._00 = 3;
-	    A._11 = 0;
-	    A._22 = 3;
-	    A._33 = -1;
-	    // sphere or radius 2 hardwired
-	    B = float4x4::identity;
-	    B._33 = 3.5;
-	    B._13 = -4;
+        A = float4x4::identity;
+        A._00 = 0;
+        A._33 = -1;
+        // sphere or radius 2 hardwired
+        B = float4x4::identity;
+        B._33 = -2;
     } // add methods to change quadric
 
+    ClippedQuadric(Material* material, float4x4 setA, float clip)
+	    :Intersectable(material) {
+	    // infinite cylinder hardwired
+	    A = setA;
+	    // sphere or radius 2 hardwired
+        B._00 = 1;
+        B._11 = 1;
+        B._22 = 0;
+        B._33 = clip;
+    } // add methods to change quadric
+
+    ClippedQuadric(Material* material, float4x4 setA, float4x4 setB)
+    :Intersectable(material) {
+        // infinite cylinder hardwired
+        A = setA;
+        // sphere or radius 2 hardwired
+        B = setB;
+    } // add methods to change quadric
+    
+    void rotate(float3 axis, float angle) {
+        A = float4x4::rotation(axis, -angle) * A * float4x4::rotation(axis, angle);
+        B = float4x4::rotation(axis, -angle) * B * float4x4::rotation(axis, angle);
+    }
+    
+    void scale(float3 scaleFactor) {
+        scaleFactor = float3(1 / scaleFactor.x, 1 / scaleFactor.y, 1 / scaleFactor.z);
+        A = float4x4::scaling(scaleFactor) * A * float4x4::scaling(scaleFactor);
+        B = float4x4::scaling(scaleFactor) * B * float4x4::scaling(scaleFactor);
+    }
+    
+    void translate(float3 translation) {
+        A = float4x4::translation(translation) * A * float4x4::translation(translation).transpose();
+        B = float4x4::translation(translation) * B * float4x4::translation(translation).transpose();
+    }
+    
+    void translateB(float3 translation) {
+        B = float4x4::translation(translation) * B * float4x4::translation(translation).transpose();
+    }
+    
     Hit intersect(const Ray& ray)
     {
 
@@ -414,12 +475,12 @@ public:
         double t1 = (-b + sqrt_discr)/2.0/a;
         double t2 = (-b - sqrt_discr)/2.0/a;
  
-		float4 hit1 = e + d * t1;
-		if(hit1.dot(B * hit1) > 0) // if not in B
-		    t1 = -1;				 // invalidate
-		float4 hit2 = e + d * t2;
-		if(hit2.dot(B * hit2) > 0) // if not in B
-		    t2 = -1; 	
+        float4 hit1 = e + d * t1;
+        if(hit1.dot(B * hit1) > 0) // if not in B
+            t1 = -1;				 // invalidate
+        float4 hit2 = e + d * t2;
+        if(hit2.dot(B * hit2) > 0) // if not in B
+            t2 = -1;
 
 		float t = (t1<t2)?t1:t2;
 		if(t < 0)
@@ -443,6 +504,96 @@ public:
     }
 };
 
+class InverseClippedQuadric : public Intersectable
+{
+    float4x4 A;
+    float4x4 B;
+public:
+    InverseClippedQuadric(Material* material, float4 setA, float clip)
+    :Intersectable(material) {
+        // infinite cylinder hardwired
+        A = float4x4::identity;
+        A._00 = setA.x;
+        A._11 = setA.y;
+        A._22 = setA.z;
+        A._33 = setA.w;
+        // sphere or radius 2 hardwired
+        B = float4x4::identity;
+        B._00 = .4;
+        B._11 = 1.5;
+        B._22 = 0;
+        B._33 = clip;
+    } // add methods to change quadric
+    
+    void rotate(float3 axis, float angle) {
+        A = float4x4::rotation(axis, -angle) * A * float4x4::rotation(axis, angle);
+        B = float4x4::rotation(axis, -angle) * B * float4x4::rotation(axis, angle);
+    }
+    
+    void scale(float3 scaleFactor) {
+        scaleFactor = float3(1 / scaleFactor.x, 1 / scaleFactor.y, 1 / scaleFactor.z);
+        A = float4x4::scaling(scaleFactor) * A * float4x4::scaling(scaleFactor);
+        B = float4x4::scaling(scaleFactor) * B * float4x4::scaling(scaleFactor);
+    }
+    
+    void translate(float3 translation) {
+        A = float4x4::translation(translation) * A * float4x4::translation(translation).transpose();
+        B = float4x4::translation(translation) * B * float4x4::translation(translation).transpose();
+    }
+    
+    Hit intersect(const Ray& ray)
+    {
+        
+        // ray in homo coords
+        float4 e = float4(ray.origin.x,
+                          ray.origin.y, ray.origin.z, 1);
+        float4 d = float4(ray.dir.x,
+                          ray.dir.y, ray.dir.z, 0);
+        
+        // quadratic coeffs.
+        double a = d.dot( A * d );
+        double b = e.dot( A * d )
+        + d.dot( A * e );
+        double c = e.dot( A * e );
+        // from here on identical to Sphere
+        
+        double discr = b * b - 4.0 * a * c;
+        if ( discr < 0 )
+            return Hit();
+        double sqrt_discr = sqrt( discr );
+        double t1 = (-b + sqrt_discr)/2.0/a;
+        double t2 = (-b - sqrt_discr)/2.0/a;
+    
+        float4 hit1 = e + d * t1;
+        if(hit1.dot(B * hit1) < 0) // if not in B
+            t1 = -1;				 // invalidate
+        float4 hit2 = e + d * t2;
+        if(hit2.dot(B * hit2) < 0) // if not in B
+            t2 = -1;
+        
+        float t = (t1<t2)?t1:t2;
+        if(t < 0)
+            t = (t1<t2)?t2:t1;
+        if (t < 0)
+            return Hit();
+        
+        Hit h;
+        h.t = t;
+        h.material = material;
+        h.position = ray.origin + ray.dir * t;
+        float4 hPos = float4(h.position.x,
+                             h.position.y, h.position.z, 1);
+        // homo normal per quadric normal formula
+        float4 hNormal = A * hPos +  hPos * A;
+        // Cartesian normal
+        h.normal = float3(hNormal.x, hNormal.y, hNormal.z).normalize();
+        // h.normal.normalize();
+        
+        return h;
+    }
+};
+
+
 
 class Scene
 {
@@ -455,32 +606,104 @@ public:
 	Scene()
 	{
 		// ADD LIGHT SOURCES HERE
-		// lightSources.push_back(new DirectionalLightSource(float3(.8,.8,.8), float3(.7,0,.3)));
-		lightSources.push_back(new DirectionalLightSource(float3(.4,.4,.4), float3(.4,.7,1)));
+		 lightSources.push_back(new DirectionalLightSource(float3(.05,.05,.1), float3(0,7,1)));
+		lightSources.push_back(new DirectionalLightSource(float3(.2,.2,.35), float3(.4,.7,1)));
+//        lightSources.push_back(new DirectionalLightSource(float3(.2,.2,.4), float3(.4,.7,1)));
 
 		// lightSources.push_back(new DirectionalLightSource(float3(.15,.15,.15), float3(-1,-1,1)));
-		// lightSources.push_back(new PointLightSource(float3(.8,0,.8), float3(0,-.7,.7)));
+		 lightSources.push_back(new PointLightSource(float3(.3,0,.1), float3(0,-.35,.7)));
 		// lightSources.push_back(new PointLightSource(float3(.6, .6, .6), float3(.5,.5,.5)));
 		// ADD MATERIALS HERE
+        
+        // snow
 		materials.push_back(new Material());
 		materials.at(0)->kd = float3(2,2,2);//float3(1.5,1.5,1.5);
 		materials.at(0)->ks = float3(1,1,1);
+        materials.at(0)->minReflectance = float3(.5, .5, .5);
+        materials.at(0)->shininess = 40;
 
+        // copper
 		materials.push_back(new Material());
 		materials.at(1)->reflective = true;
-		materials.at(1)->refractiveIndex = 1.1;
-		materials.at(1)->kd = float3(1,.3,0);
-
+		materials.at(1)->minReflectance = float3(.06, .02, 0);
+		materials.at(1)->refractiveIndex = .46;
+		materials.at(1)->kd = float3(.6,.2,0);
+//        materials.at(1)->kd = float3(1,1,1);
+        
+        // other obj
+        materials.push_back(new Material());
+        materials.at(2)->minReflectance = float3(.1, .03, 0);
+        materials.at(2)->refractiveIndex = .4;
+        materials.at(2)->kd = float3(.3,.3,.3);
+        
+        // nose
+        materials.push_back(new Material());
+        materials.at(3)->minReflectance = float3(.1, .03, 0);
+        materials.at(3)->kd = float3(1,.4, 0);
+        
+        //bowtie
+        materials.push_back(new Material());
+        materials.at(4)->minReflectance = float3(.1, .03, 0);
+        materials.at(4)->refractiveIndex = .4;
+        materials.at(4)->kd = float3(.4,1,1);
+        
+//        objects.push_back(new Sphere(float3(1,1,-1), 1, materials.at(1)));
+//        objects.push_back(new Quadric(float3(-1.5,-.5,-1.5), float4(1,1,1,-1), materials.at(1)));
+        
 		// ADD OBJECTS HERE
-		objects.push_back(new Sphere(float3(0,1,1), .4, materials.at(0)));
-		objects.push_back(new Quadric(float3(0,-5,-4.5), float4(4,8,5,-1), materials.at(0)));
-		objects.push_back(new Quadric(float3(0,18,4), float4(5,10,7,-1), materials.at(0)));
+        // snowman
+        Quadric* head = new Quadric(materials.at(0));
+        head->scale(float3(.3, .7, .4));
+        head->translate(float3(0,-.7,-.2));
+        objects.push_back(head);
+        InverseClippedQuadric* postModernMid = new InverseClippedQuadric(materials.at(0), float4(.6,5.5,1,-2), -.06);
+        postModernMid->scale(float3(.45, 1, .4));
+        postModernMid->translate(float3(0,.3,-.3));
+        objects.push_back(postModernMid);
+        Quadric* bodyBot = new Quadric(materials.at(0));
+        bodyBot->scale(float3(.6 , 1.1, .4));
+        bodyBot->translate(float3(0,1.3,0));
+        objects.push_back(bodyBot);
+        
+        // accessories
+        ClippedQuadric* potHat = new ClippedQuadric(materials.at(1));
+        potHat->scale(float3(.3, .5, .4));
+        potHat->rotate(float3(0,0,.1), 3.14/2);
+        potHat->translate((float3(0, -1.24, -.5)));
+        objects.push_back(potHat);
+        
+        float4x4 bowA = float4x4(1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,-1);
+        float4x4 bowB = float4x4(2,0,0,0, 0,2,0,0, 0,0,1,0, 0,0,0,-2);
+        ClippedQuadric* bow = new ClippedQuadric(materials.at(4), bowA, bowB);
+        bow->scale(float3(.025,.3,.3));
+        bow->rotate(float3(0,0.1,0), 3.14/2);
+        bow->translate(float3(0,-.2,-.7));
+        objects.push_back(bow);
+        
+        float4x4 noseA = float4x4(26,0,0,0, 0,-1,0,0, 0,0,26,0, 0,0,0,0);
+        float4x4 noseB = float4x4(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,-1);
+        ClippedQuadric* nose = new ClippedQuadric(materials.at(3), noseA, noseB);
+        nose->translateB(float3(0,1,0));
+        nose->scale(float3(.15,.25,.15));
+        nose->rotate(float3(0,0,0.1), 3.14/2);
+        nose->rotate(float3(0,0.1,0), 3.14/2.5);
+        nose->rotate(float3(0.1,0,0), 3.14/6);
+        nose->translate(float3(.3, -.15, -1.8));
+        objects.push_back(nose);
 
-		objects.push_back(new ClippedQuadric(materials.at(1)));
-
+        // reflected objects
+        Sphere* reflectedObj = new Sphere(float3(0,1.5,1.5), .15, materials.at(0));
+        objects.push_back(reflectedObj);
+        ClippedQuadric* reflectedObjHat = new ClippedQuadric(materials.at(2));
+        reflectedObjHat->scale(float3(.2, .2, .2));
+        reflectedObjHat->rotate(float3(0,0,.1), 3.14/4);
+        reflectedObjHat->translate(float3(-.3,-1.7,-1.5));
+        objects.push_back(reflectedObjHat);
+//
 		objects.push_back(new Plane(float3(0,1,-.2), float3(0,-2.2, 0), materials.at(0)));
-
+        
 	}
+    
 	~Scene()
 	{
 		for (std::vector<LightSource*>::iterator iLightSource = lightSources.begin(); iLightSource != lightSources.end(); ++iLightSource)
@@ -505,11 +728,6 @@ public:
 	float pow5(float x) {
 		return x * x * x * x * x;
 	}
-
-	// float F(float3 position, float3 dir, Ray& ray, float ri) {
-	// 	float F0 = square(ri - 1)/square(ri + 1);
-	// 	return F0 + (1-F0) * (1-(ray.dir.x * dir.x + ray.dir.y * dir.y + ray.dir.z * dir.z));
-	// }
 
 public:
 	Camera& getCamera()
@@ -538,58 +756,33 @@ public:
 	// 	if (objects.size() < 1)
 	// 		return ray.dir * ray.dir;
 
-	// 	// Hit hit = firstIntersect(ray);
+    // Hit hit = firstIntersect(ray);
 
-	// 	// if(hit.t < 0)
-	// 	// 	return ray.dir * ray.dir;
+    // if(hit.t < 0)
+    // 	return ray.dir * ray.dir;
 
-	// 	// float3 lightSum = float3(0,0,0);
-	// 	// float3 shade = float3(0,0,0);
-	// 	// for (int i = 0; i < lightSources.size(); i++) {
-	// 	// 	lightSum += lightSources.at(i)->getPowerDensityAt(hit.position) 
-	// 	// 		* max(0.0, hit.normal.dot(lightSources.at(i) ->getLightDirAt(hit.position)));
-	// 	// 	if (hit.material != NULL)
-	// 	// 		shade += hit.material->shade(hit.position, hit.normal, camera.getEye(),
-	// 	// 			lightSources.at(i)->getLightDirAt(hit.position),
-	// 	// 			lightSources.at(i)->getPowerDensityAt(hit.position));
-	// 	// }
+    // float3 lightSum = float3(0,0,0);
+    // float3 shade = float3(0,0,0);
+    // for (int i = 0; i < lightSources.size(); i++) {
+    // 	lightSum += lightSources.at(i)->getPowerDensityAt(hit.position) 
+    // 		* max(0.0, hit.normal.dot(lightSources.at(i) ->getLightDirAt(hit.position)));
+    // 	if (hit.material != NULL)
+    // 		shade += hit.material->shade(hit.position, hit.normal, camera.getEye(),
+    // 			lightSources.at(i)->getLightDirAt(hit.position),
+    // 			lightSources.at(i)->getPowerDensityAt(hit.position));
+    // }
 
-	// 	// return lightSum;//shade;
-
-	// 	Hit hit = firstIntersect(ray);
-
-	// 	if(hit.t < 0) return ray.dir * ray.dir; // nothing
-
-	// 	float3 outRadiance (0, 0, 0);
-	// 	for(int i = 0; i < lightSources.size(); i++) {
-	// 		Ray shadowRay(hit.position + hit.normal * .0001, lightSources.at(i)->getLightDirAt(hit.position));
-	// 		Hit shadowHit = firstIntersect(shadowRay);
-	// 		if(shadowHit.t < 0 || shadowHit.t > lightSources.at(i)->getDistanceFrom(hit.position) ) {
-	// 		    outRadiance += hit.material->shade(hit.position, hit.normal, -ray.dir, lightSources.at(i)->getLightDirAt(hit.position),
-	// 		    	lightSources.at(i)->getPowerDensityAt(hit.position));
-	// 		}
-	// 	}
-	// 	if(hit.material->reflective){
-	// 	    float3 reflectionDir = hit.material->reflect(hit.position, hit.normal);
-	// 	    Ray reflectedRay(hit.position + hit.normal*.0001, reflectionDir);
-	// 	    outRadiance += trace(reflectedRay); //* .4 * //F(hit.position,hit.normal);
-	// 	}
-	// 	if(hit.material->refractive) {
-	// 	    float3 refractionDir = hit.material->refract(hit.position, hit.normal);
-	// 	    Ray refractedRay(hit.position + hit.normal * .0001, refractionDir );
-	// 	    outRadiance += trace(refractedRay)*(float3(1,1,1));//-F(V,N));
-	// 	}
-	// 	return outRadiance;
-
-
-	// 	// return lightSum;// + hit.normal; 
-	// 	//return hit.normal;
+    // return lightSum;// + hit.normal; 
+    //return hit.normal;
 	// }
 
 	float3 trace(Ray ray, int depth) {
 	    // if(depth > maxDepth) return ray.dir * ray.dir;
 	    Hit hit = firstIntersect(ray);
-	    if(hit.t < 0) return ray.dir * ray.dir; // nothing
+        if(hit.t < 0)
+            return float3(0, (sin(ray.dir.x * 4 + ray.dir.y * 9) + 1) * perlin.marble(ray.dir),
+                          (cos(ray.dir.x * 9 + ray.dir.y * 4) + 1)  * perlin.marble(ray.dir));
+            // nothing
 
 	    float3 outRadiance(0, 0, 0);
 	    for(int i = 0; i < lightSources.size(); i++) {
@@ -600,25 +793,31 @@ public:
 			    	lightSources.at(i)->getPowerDensityAt(hit.position));
 			}
 	    }
-		float F0 = square(hit.material->refractiveIndex - 1)/square(hit.material->refractiveIndex + 1);
-		float F = (ray.dir.x * hit.normal.x + ray.dir.y * hit.normal.y + ray.dir.z * hit.normal.z);
-	    if(hit.material->reflective){
-	    	if (depth != 0) {
-			    float3 reflectionDir = hit.material->reflect(hit.position, hit.normal);
-			    Ray reflectedRay(hit.position + hit.normal*.0001, reflectionDir);
-			    outRadiance += trace(reflectedRay, depth-1)
-			    	// * hit.normal * .4;
-			    	* (F0 + (1-F0) * (1-F));
-			    	//* hit.normal * .4;//F(hit.position,hit.normal);
-			}
-	    }
+		
+        float f0 = ((hit.material->refractiveIndex-1)*(hit.material->refractiveIndex-1))/((hit.material->refractiveIndex+1)*(hit.material->refractiveIndex+1));
+        float3 normalDir = ray.dir;
+        float costheta = normalDir.normalize().dot(hit.normal.normalize());
+        
+        if(hit.material->reflective){
+            if(depth==0) {
+                outRadiance += float3(0,0,0);
+            } else {
+                float3 reflectionDir = hit.material->reflect(ray.dir, hit.normal);
+                Ray reflectedRay(hit.position + hit.normal*0.0001, reflectionDir );
+                float f0 = ((hit.material->refractiveIndex-1)*(hit.material->refractiveIndex-1))/((hit.material->refractiveIndex+1)*(hit.material->refractiveIndex+1));
+                float3 normalDir = ray.dir;
+                float costheta = normalDir.normalize().dot(hit.normal.normalize());
+                outRadiance += trace(reflectedRay,depth-1)
+                * (f0+(1-f0)*pow5(1-costheta));//*(1-costheta)*(1-costheta)*(1-costheta)*(1-costheta));
+            }
+        }
+        
 	    if(hit.material->refractive) {
 	    	if (depth != 0) {
 			    float3 refractionDir = hit.material->refract(hit.position, hit.normal);
-			    Ray refractedRay(hit.position - hit.normal * .0001, refractionDir );
-				float F0 = square(hit.material->refractiveIndex - 1)/square(hit.material->refractiveIndex + 1);
+                Ray refractedRay(hit.position - hit.normal * .0001, refractionDir );
 			    outRadiance += trace(refractedRay, depth-1)*(float3(1,1,1)
-			    	-(F0 + (1-F0) * (1-F)));//hit.normal*.4);
+			    	-(f0+(1-f0)*pow5(1-costheta)));//hit.normal*.4);
 			}
 	    }
 	    return outRadiance;
